@@ -1,0 +1,11 @@
+1. Convert from RGB to YCbCr.
+2. Take 2x2 blocks from image and sub sample chroma, 4 pixels now share 1 Cb 1 Cr, remove 128 from all of these to keep the range [-128, 128] Store them into 3 arrays.
+3. padd all of these at the end to make it divisble by 8.
+4. Apply FDCT to all three arrays. 
+
+FDCT: It takes 8x8 chunk from the image and then compares it to a 64 cosine waves chart and find out mathematically how much each of them contribute to make this chunk. after giving 64 pixels data we get 64 co efficients which will range in [-1023, 1024].
+
+5. The problem is the range of the co efficients. observing the results mathematicians found out the co effs was biggest on the first wave, higher in top left waves and lower in bottom right. They gave a general table to divide all those co effs  and whatever comes out round it off to nearest integer. cleverly in the table they put values acc to thier observation so [small in top left, large in botom right and so on], this process is called QUANTIZATION. the table from which the number were taken to divide is called QUANTIZATION TABLE. There are various depending upon how much compression you wish to have.
+
+6. Arrange them in zig zag order to tie all the zeros a the end (here used huffman encoding to even double down the optimisation) (therell be more zeroes in the bottom left) this becomes the output.jpeg's bitstream. ( some more rules )
+7. Add headers of a valid jpeg, put quant and huffman table in the jpeg to let the decoder know cos its image dependent, put the bitstream. voilah! its done ( i guess ).
