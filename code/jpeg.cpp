@@ -1,6 +1,16 @@
 #include "common.h"
 #include "jpeg.h"
 
+JPEG_BUFFER init_buffer(){
+    JPEG_BUFFER b = {0};
+    b.length = 0;
+    b.size = 64;
+    b.data = (uint8_t*) malloc(b.size);
+    b.acc = 0;
+    b.bits = 0;
+    return b;
+}
+
 // (AI) (Let's just hope it does not fuck up)
 int build_huffman(
     const uint8_t *nr,

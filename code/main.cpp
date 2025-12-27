@@ -1,7 +1,9 @@
 #include "common.h"
 #include "jpeg.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fcntl.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
@@ -16,10 +18,10 @@
 
 global bool isRunning = true;
 global int fd;
-// global int Width = 8;
-// global int Height = 8;
 global int Width = 640;
 global int Height = 480;
+global int filter = 0;
+global int FilterNums = 9; 
 
 struct Offscreen_buffer {
      SDL_Texture *Texture;
@@ -32,6 +34,18 @@ struct Offscreen_buffer {
 
 global Offscreen_buffer Buffer = {
     .BytesPerPixel = 4
+};
+
+enum FILTERS {
+    NORMAL = 0,
+    MASK,
+    PAINT,
+    SEPIA,
+    GHOST,
+    EDGE,
+    EDGE_EX,
+    MIRROR,
+    SOMETHING
 };
 typedef struct RGB {
     double R;
@@ -55,18 +69,83 @@ RGB YUV_TO_RGB(int Y, int U, int V){
     return rgb;
 };
 
+
 // Writes pixel colors into the BITMAP buffer;
 internal void Render(Offscreen_buffer *Buffer){
     uint8_t *YUYVArrClone = (uint8_t*)Buffer->YUYVArray;
     uint8_t *BitmapMemoryClone = (uint8_t*)Buffer->BitmapMemory;
+    int row = -1;
+    int col = 0;
+    int BytesInRow = Buffer->BitmapWidth * 2;
     for (int yuyvIndex = 0, nthPixel = 0; yuyvIndex < Buffer->BitmapHeight * Buffer->BitmapWidth * 2; yuyvIndex+=4, nthPixel+=2) {
         int Yi = YUYVArrClone[yuyvIndex];
-        int U = YUYVArrClone[yuyvIndex+1];
         int Yii = YUYVArrClone[yuyvIndex+2];
+        int U = YUYVArrClone[yuyvIndex+1];
         int V = YUYVArrClone[yuyvIndex+3];
+        switch (filter) {
+            case (NORMAL):{
+                break;
+            };
+
+            case(MIRROR):{
+                if(col >= BytesInRow / 2){
+                    int modified_index = (row * BytesInRow) + (BytesInRow/2) - (col - (BytesInRow/2)) - 4;
+                    Yii = YUYVArrClone[modified_index];
+                    U = YUYVArrClone[modified_index + 1];
+                    Yi = YUYVArrClone[modified_index + 2];
+                    V = YUYVArrClone[modified_index + 3];
+                }
+                break;
+            };
+
+            case(MASK):{
+                Yi = Yi > 80 ? 255 : 0;
+                Yii = Yii > 90 ? 255 : 0;
+                break;
+            }
+            case(PAINT):{
+                int levels = 20;
+                int step = 256 / levels;
+                Yi = (Yi / step)*step;
+                Yii = (Yii / step)*step;
+                break;
+            }
+            case(GHOST):{
+                Yi = 255 - Yi;
+                Yii = 255 - Yii;
+                break;
+            }
+            case(SEPIA):{
+                Yi  = Yi  >> 1;
+                Yii = Yii >> 1;
+                break;
+            }
+            case(EDGE):{
+                Yi  = abs(Yi  - Yii) * 4;
+                Yii = Yi;
+                break;
+            }
+            case(EDGE_EX):{
+                int d = abs(Yi - Yii);
+                Yi  = d > 12 ? 255 : 0;
+                Yii = Yi;
+                break;
+            }
+            case(SOMETHING):{
+                int d = abs(Yi - Yii);
+                Yi  = d * 10;
+                Yii = Yi;
+                break;
+            }
+        }
+
+        YUYVArrClone[yuyvIndex] = Yi;
+        YUYVArrClone[yuyvIndex+2] = Yii;
+        YUYVArrClone[yuyvIndex+1] = U;
+        YUYVArrClone[yuyvIndex+3] = V;
+
         RGB RGBi = YUV_TO_RGB(Yi, U, V);
         RGB RGBii = YUV_TO_RGB(Yii, U, V);
-
         int currentBitmapIndex = nthPixel * 4;
         (BitmapMemoryClone)[currentBitmapIndex] = RGBi.R;
         (BitmapMemoryClone)[currentBitmapIndex+1] = RGBi.G;
@@ -77,6 +156,14 @@ internal void Render(Offscreen_buffer *Buffer){
         (BitmapMemoryClone)[currentBitmapIndex+5] = RGBii.G;
         (BitmapMemoryClone)[currentBitmapIndex+6] = RGBii.B;
         (BitmapMemoryClone)[currentBitmapIndex+7] = 00;
+
+        if(!(yuyvIndex % (Buffer->BitmapWidth * 2))){
+            row++;
+            col = 0;
+        }
+        else {
+            col+=4;
+        }
     }
 }
 
@@ -113,16 +200,6 @@ internal void SDLUpdateWindow(Offscreen_buffer *Buffer, SDL_Window *Winodw, SDL_
     SDL_RenderPresent(Renderer);
 }
 
-JPEG_BUFFER init_buffer(){
-    JPEG_BUFFER b = {0};
-    b.length = 0;
-    b.size = 64;
-    b.data = (uint8_t*) malloc(b.size);
-    b.acc = 0;
-    b.bits = 0;
-    return b;
-}
-
 void SavePicture(Offscreen_buffer *Buffer){
     uint8_t *YUYVArrClone = (uint8_t*)Buffer->YUYVArray;
     local int BytesPerPixel = 2;
@@ -148,9 +225,6 @@ void SavePicture(Offscreen_buffer *Buffer){
         }
     }
 
-    time_t now = now_sec();
-    double end = now_sec();
-    printf("Time: %.3f ms\n", (end - now) * 1000.0);
     for(int col = 0; col < Buffer->BitmapHeight; col+=8){
         for(int row = 0; row < Buffer->BitmapWidth; row+=8){
             int ChunkY[8][8] = {0};
@@ -211,16 +285,12 @@ void SavePicture(Offscreen_buffer *Buffer){
         }
     }
 
-    end = now_sec();
-    printf("Time: %.3f ms\n", (end - now) * 1000.0);
-
     finalize_buffer(&OUT);
-    char buff[64];
-    snprintf(buff, sizeof(buff), "picture-%f.jpeg", end);
+    time_t now = time(NULL);
+    char buff[16];
+    snprintf(buff, sizeof(buff), "picture-%li.jpeg", now);
     write_jpeg_file(buff, &OUT, Buffer->BitmapWidth, Buffer->BitmapHeight);
-
-    end = now_sec();
-    printf("Time: %.3f ms\n", (end - now) * 1000.0);
+    free(OUT.data);
 };
 
 void HandleEvent(Offscreen_buffer *Buffer, SDL_Event *Event){
@@ -255,6 +325,14 @@ void HandleEvent(Offscreen_buffer *Buffer, SDL_Event *Event){
                 case 32:{
                     printf("Clicks!\n");
                     SavePicture(Buffer);
+                    break;
+                }
+                case 110: {
+                    filter++;
+                    if(filter == FilterNums){
+                        filter = 0;
+                    }
+                    printf("Changing filter to (%d)\n", filter);
                     break;
                 }
             }
@@ -320,6 +398,8 @@ int main(int argc, char *argv[]){
 
         enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl(fd, VIDIOC_STREAMON, &type);
+
+        printf("All Set! <Space> to click. <N> to change filter.\n");
         while(isRunning){
             // gives the buffer to driver to write into
             ioctl(fd, VIDIOC_QBUF, &buf);
@@ -328,12 +408,15 @@ int main(int argc, char *argv[]){
             ioctl(fd, VIDIOC_DQBUF, &buf);
 
             SDL_Event Event;
+            Render(&Buffer);
+            SDLUpdateWindow(&Buffer, Window, Renderer);
             while(SDL_PollEvent(&Event)){
                 HandleEvent(&Buffer, &Event);
             }
-            Render(&Buffer);
-            SDLUpdateWindow(&Buffer, Window, Renderer);
         }
+    }
+    if(Buffer.BitmapMemory){
+        free(Buffer.BitmapMemory);
     }
     return 0;
 }
